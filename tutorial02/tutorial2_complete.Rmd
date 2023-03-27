@@ -1,0 +1,179 @@
+---
+title: "Social Forecasting Tutorial 2"
+author: "Martyn Egan"
+date: "24/03/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(forecast)
+library(zoo)
+
+setwd(getwd())
+```
+
+# Naive Forecasts and Performance Evaluation
+
+## Data Partitioning
+
+Similarly to machine learning, time series forecasting involves partitioning data to test the accuracy of models. However, whereas machine learning on cross-sectional data involves partitioning into randomly assigned *sets*, time series forecasting requires partitioning the data into *periods*, where the earlier period is the *training* period, and the later period the *validation* period. (Note: there is no equivalent in time series forecasting to the hold-out test set in ML.) Once the model has been trained and a final model selected, the training and validation sets are recombined, and the chosen model rerun on the complete data. 
+
+The length of the validation period depends on:
+
+- The forecasting goal
+- The data frequency
+- The forecast horizon
+
+## An Example of Partitioning with the Amtrak Data
+
+```{r partitioning example}
+amtrak <- read.csv("data/Amtrak.csv") #read in data
+amtrak.ts <- ts(amtrak$Ridership, start = c(1991, 1), end = c(2004, 3), frequency = 12)
+
+nValid <- 36 #The length of our validation period in months
+nTrain <- length(amtrak.ts) - nValid #The length of our training period
+
+#Partition the data into training and validation periods
+train.ts <- window(amtrak.ts, start = c(1991, 1),
+                   end = c(1991, nTrain)) #we use nTrain to set the end of the window
+valid.ts <- window(amtrak.ts, start = c(1991, nTrain + 1),
+                   end = c(1991, nTrain + nValid))
+
+#Run a regression on the training set
+train.lm <- tslm(train.ts ~ trend + I(trend^2))
+
+#Use the model to predict forward into the validation period
+train.lm.pred <- forecast(train.lm, h = nValid, #we predict forward 36 periods
+                          level = 0) #confidence level for prediction intervals
+
+#Make a plot of the model and prediction
+plot(train.lm.pred, ylim = c(1300, 2600), ylab = "Ridership", xlab = "Time", bty = "l",
+     xaxt = "n", xlim = c(1991, 2006.25), main = "", flty = 2)
+axis(1, at = seq(1991, 2006, 1), labels = format(seq(1991, 2006, 1)))
+lines(train.lm$fitted, lwd = 2) #add the model line in the training period
+lines(valid.ts) #add the lines for the validation period
+```
+
+## Naive Forecasts
+
+A *naive forecast* is the most recent value of the time series; in the case of a seasonal series, a *seasonal naive forecast* is the value from the most recent identical season. Naive forecasts are used both as a simple forecasting method and as a baseline when evaluating the performance of other methods. The `forecast` package contains the `naive()` and `snaive()` functions for calculating the naive and seasonal naive forecasts.
+
+```{r naive forecasts}
+naive.pred <- naive(train.ts, h = nValid)
+snaive.pred <- snaive(train.ts, h = nValid)
+
+plot(amtrak.ts, ylab = "Ridership", xlab = "Time", xlim = c(1991, 2002))
+lines(naive.pred$mean, lty = 3, lwd = 2, col = "red")
+lines(snaive.pred$mean, lty = 3, lwd = 2, col = "blue")
+abline(v = 2001.25, lty = 2)
+```
+
+## Measuring Predictive Accuracy
+
+There are several metrics for determining the predictive accuracy of forecasting models, all of which are *based on the validation period*, and use the prediction error arising from the training model. 
+
+### Common Prediction Accuracy Measures
+
+- The *forecast error (residual)* for a time period *t*, denoted *e~t~*, is the difference between the actual value (*y~t~*) and the forecast value.
+- *MAE or MAD (mean absolute error/deviation)* gives the magnitude of the average absolute error.
+- *Average error* similar to MAD, except it keeps the signs, and gives an indication of whether the model is overall under- or over-predicting.
+- *MAPE (mean absolute percentage error)* a percentage score of how forecasts deviate (on average) from actual values. It allows comparing data across series with different scales, but is biased towards models that under-forecast.
+- *RMSE (root mean squared error)* expressed in the same units as the data series.
+
+Each of these measures can be obtained by using the `accuracy()` function in the `forecast` package, which takes two arguments: an object containing forecasts, and an optional vector containing values (typically the validation set). Note: if `accuracy()` is called on a model object alone, it will return measures giving the accuracy of the fitted values of the model against the actual values in the training period (i.e. goodness of fit). In order to determine the **predictive** accuracy of the model, you must call the function on the predicted values in the model object and the validation period in the data.
+
+```{r accuracy function}
+accuracy(train.lm) #goodness of fit, i.e. fitted values against actual values
+accuracy(train.lm.pred$mean, valid.ts) #accuracy stats for prediction
+accuracy(naive.pred$mean, valid.ts) 
+accuracy(snaive.pred$mean, valid.ts)
+```
+
+## Evaluating Forecast Uncertainty
+
+Three common ways of evaluating forecasting uncertainty through visualisation are: 
+
+### 1. plotting forecast errors in both time plots and histograms
+
+```{r plotting forecast errors}
+plot(train.lm$residuals, xlim = c(1991, 2005), ylim = c(-400, 400), ylab = "residual")
+lines(valid.ts - train.lm.pred$mean)
+abline(v = 2001.25, col = "blue")
+
+hist(c(train.lm$residuals, #histogram combining train and validation errors
+       valid.ts - train.lm.pred$mean),
+     xlab = "residual", main = "")
+
+plot(density(c(train.lm$residuals, #a pdf
+               valid.ts - train.lm.pred$mean)),
+     xlab = "residual", main = "")
+```
+
+### 2. plotting prediction intervals
+
+```{r plotting prediction intervals}
+# To plot a simple 95 percent prediction interval, we add 95 to the level argument in the 
+# forecast function
+level.lm.pred <- forecast(train.lm, h = nValid, level = 95)
+
+# We can then recycle our earlier code
+plot(level.lm.pred, ylim = c(1300, 2600), ylab = "Ridership", xlab = "Time", bty = "l",
+     xaxt = "n", xlim = c(1991, 2006.25), main = "", flty = 2)
+axis(1, at = seq(1991, 2006, 1), labels = format(seq(1991, 2006, 1)))
+lines(train.lm$fitted, lwd = 2)
+lines(valid.ts)
+```
+
+Having previously examined the distribution of the errors (residuals), we know that they are not normally distributed. We could obtain a prediction interval more accurately following the real distribution of the errors by using `R`'s `quantile()` function on the `train.lm$residuals` object, and obtaining the 5th and 95th percentiles.
+
+### 3. plotting prediction cones 
+
+For some models, such as exponential smoothing models (which we will introduce later), there are different levels of forecasting uncertainty for different future time periods. Below is an example using the Amtrak data. 
+
+```{r plotting prediction cones}
+train.AAN <- ets(train.ts, model = "AAN")
+train.AAN.pred <- forecast(train.AAN, h = nValid, level = c(0.2, 0.4, 0.6, 0.8))
+
+plot(train.AAN.pred, ylab = "Ridership")
+```
+
+### Task
+
+The `SouvenirSales.csv` dataset contains monthly sales data for a souvenir shop in Queensland, Australia, between 1995 and 2001.
+
+- Partition the data into train and validation periods. The validation period should be the last 12 months of the data.
+- Perform a naive and seasonal naive forecast.
+- Compute the RMSE and MAPE for the naive forecasts.
+- Plot a histogram of the errors for **the validation period** from the naive forecasts.
+- Plot a time plot for the naive forecasts, with actual sales numbers in the validation period. What conclusions can you draw about the behaviour of the forecasts?
+
+```{r task}
+svs <- read.csv("data/SouvenirSales.csv") #read in file
+svs.ts <- ts(svs[,2], start = c(1995, 1), end = c(2001, 12), frequency = 12) #convert to ts
+
+#Partition into train and validation periods
+nValid = 12
+nTrain = length(svs.ts) - nValid
+svs.train <- window(svs.ts, start = c(1995, 1), end = c(1995, nTrain))
+svs.valid <- window(svs.ts, start = c(1995, nTrain +1), end = c(1995, nTrain + nValid))
+
+#Perform a naive and seasonal naive forecast
+svs.naive <- naive(svs.train, h = nValid)
+svs.snaive <- snaive(svs.train, h = nValid)
+
+#Compute RMSE and MAPE for naive forecasts
+accuracy(svs.naive, svs.valid)
+accuracy(svs.snaive, svs.valid)
+
+#Histogram of errors
+hist(svs.valid - svs.naive$mean, main = "Naive Forecast", ylab = "errors")
+hist(svs.valid - svs.snaive$mean, main = "Seasonal Naive Forecast", ylab = "errors")
+
+#Time plot of forecasts
+plot(svs.ts, ylab = "Sales", xlab = "Time", xlim = c(2001, 2002))
+lines(svs.naive$mean, lty = 3, lwd = 2, col = "red")
+lines(svs.snaive$mean, lty = 3, lwd = 2, col = "blue")
+abline(v = 2001, lty = 2)
+```
