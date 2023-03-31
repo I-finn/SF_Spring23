@@ -1,0 +1,194 @@
+---
+title: "Social Forecasting Tutorial 3"
+author: "Martyn Egan"
+date: "31/03/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(forecast)
+library(zoo)
+
+setwd(getwd())
+```
+
+# Data-driven Forecasting
+
+Forecasting methods can be divided into model-based and data-driven methods. Model-based methods involve fitting data to a model, whose parameters have been estimated from the training period. Regression and autocorrelation-based models (including ARIMA) are model-based methods.
+
+Data-driven methods, by contrast, use algorithms to "learn" patterns from the data. Naive forecasts are data-driven, as are smoothing methods, which are the main focus of today's class. Moving averages can be used to "smooth" out the noise in a time series to uncover patterns. In general, data-driven methods are more useful for time series whose structure changes over time, or when model assumptions are likely to be violated.
+
+## Moving Averages
+
+A moving average is a simple smoother which averages time series values across a window (*w*) of consecutive periods. 
+
+- *Centred moving averages* are used to visualise trends, because the averaging suppresses the effects of seasonality and noise in the data. 
+
+- *Trailing moving averages* are used for forecasting: because we do not know values for future dates, the window is an average of prior values.
+
+```{r moving averages}
+amtrak <- read.csv("data/Amtrak.csv") #read in data
+amtrak.ts <- ts(amtrak$Ridership, start = c(1991, 1), end = c(2004, 3), frequency = 12)
+
+# the forecast package contains a function, ma(), for calculating centred moving averages
+ma.centred <- ma(amtrak.ts, 
+                 order = 12 # this is the window argument
+              )
+# the zoo package contains a function, rollmean(), for calculating a trailing moving average
+ma.trailing <- rollmean(amtrak.ts,
+                        k = 12, # this is the window argument
+                        align = "right" # this sets to trailing average
+                        )
+# we can plot these using autoplot() and autolayer(), which is less verbose than base plot
+autoplot(amtrak.ts) +
+  autolayer(ma.centred) +
+  autolayer(ma.trailing)
+```
+
+Note: when used for forecasting, a trailing moving average of *w* = 1 will produce a naive forecast, while *w* = *n* (the length of the training period) will average over the entire training period. Moving average forecasts are necessarily horizontal lines.
+
+```{r MA forecast}
+train.ts <- window(amtrak.ts, end = c(1991, length(amtrak.ts) - 36))
+train.mat <- rollmean(train.ts, 
+                      k = 12, # set window to 1 year
+                      align = "right")
+last.mat <- tail(train.mat, 1) # take the final value to forecast
+mat.pred.ts <- ts(rep(last.mat, 36), # make ts of moving average forecast
+                  start = c(1991, length(amtrak.ts) - 35), 
+                  end = c(1991, length(amtrak.ts)), 
+                  freq = 12) 
+
+autoplot(amtrak.ts) + # plot trailing moving average and forecast
+  autolayer(train.mat) + 
+  autolayer(mat.pred.ts)
+```
+
+## Differencing (lag)
+
+A method for removing a trend and/or seasonal pattern is through *differencing* or lagging the time series, i.e. taking the difference from two values. 
+
+- A lag-1 difference is the difference between two consecutive values. This will remove a linear trend (for quadratic or exponential trends, the process requires repeating, i.e. a lag-1 difference must be applied to the lag-1 difference.)
+
+- A lag-k difference will remove seasonality, where *k* referes to the frequency, i.e. 7 for weekly, 12 for monthly, 4 for quarterly, etc.
+
+- To remove both trend *and* seasonality, two lags must be applied.
+
+```{r differencing}
+# the diff() function performs lagging on data
+plot(amtrak.ts)
+plot(diff(amtrak.ts, lag = 12), main = "Seasonal differencing") # removes seasonality
+plot(diff(amtrak.ts, lag = 1), main = "Trend differencing") # removes a linear trend
+plot(diff(diff(amtrak.ts, lag = 12), lag = 1), 
+     main = "Seasonal and Trend differencing") # removes trend and seasonality
+
+# the forecast package contains the gglagplot() function, which will provide a faceted plot
+# containing different lags
+gglagplot(amtrak.ts, 
+          #set.lags = c(1, 12) # the set.lags argument allows specific lags to be supplied
+          )
+
+# the forecast package also contains the ggAcf() function, which plots autocorrelation. When
+# lagged values lie outside the error bars, they are considered significant. In general, 
+# white noise data (i.e. data without seasonality) would be expected to lie within the error
+# bars 95% of the time.
+ggAcf(amtrak.ts)
+```
+
+## Exponential Smoothing
+
+A further elaboration of moving average smoothing is *exponential smoothing*. Rather than a parameter *w* to set the size of the window over which values are averaged, exponential smoothing uses a parameter *alpha*, which is an exponentially decaying function across all values in the time series. By varying the value of *alpha* between 0 and 1, greater priority can be given to more recent values (a value close to 1 indicates priority given to most recent values). 
+
+*Simple exponential smoothing*, similar to naive forecasting and trailing moving average forecasting, will forecast a horizontal line.
+
+```{r simple exponential smoothing}
+diff.twice <- diff(diff(amtrak.ts, lag = 12), lag = 1) # lag twice to remove trend and seasonality
+
+train.twice <- window(diff.twice, end = c(1991, length(diff.twice) - 36))
+
+# the ses() function in forecast performs simple exponential smoothing
+train.ses <- ses(train.twice, 
+                 alpha = 0.2, # alpha can be set manually
+                 h = 36) 
+
+checkresiduals(train.ses) # the checkresiduals() function in forecast provides useful plots of residuals, as well as the Ljung-Box test statistic.
+
+autoplot(train.ses) +
+  autolayer(fitted(train.ses))
+```
+
+## Advanced Exponential Smoothing
+
+Exponential smoothing can be adapted for data with both trend and seasonality, in order to create more accurate forecasts. In order to learn more about the precise modalities, please consult the course textbook, pp. 90-98. In general, it is important to know that **error**, **trend** and **seasonality** can all be modelled differently:
+
+- Error can be additive or multiplicative (A or M)
+
+- Trend can be none, additive or damped (N, A or Ad)
+
+- Seasonality can be none, additive or multiplicative (N, A or M)
+
+The `ets()` function in the `forecast` package (which stands both for *error, trend and seasonality*, as well as *ExponenTial Smoothing*), will perform a grid search across all possible combinations of these models, and use optimisation to find the best model and the best parameters for that model. Alternatively, a model can be specified using the `model = ` argument, supplying a string of relevant models, e.g. "ANN".
+
+```{r ets function}
+train.ets <- ets(train.ts) # the ets() function picks the best model
+ets.fc <- forecast(train.ets, h = 36) # to obtain forecast values we use the forecast() function
+
+checkresiduals(ets.fc)
+
+autoplot(ets.fc) + 
+  autolayer(amtrak.ts, colour = FALSE) +
+  theme(legend.position = "none")
+
+accuracy(ets.fc, amtrak.ts)
+accuracy(snaive(train.ts, h = 36), amtrak.ts)
+```
+
+### Task
+
+The file `ApplianceShipments.csv` contains the series of quarterly shipments (in millions of USD) of US household appliances between 1985 and 1989.
+
+a) Create a time series object from the data and produce a well-formatted plot.
+
+```{r question a}
+aps <- read.csv("data/ApplianceShipments.csv")
+aps.ts <- ts(aps[,-c(1, 3, 4)], start = c(1985, 1), frequency = 4)
+autoplot(aps.ts, ylab = "millions of USD", main = "Shipments of Household Appliances")
+```
+
+b) Use different exploratory methods to check the data for trend and seasonality. Which method of forecasting would be most suitable to this data?
+
+```{r question b}
+gglagplot(aps.ts)
+ggAcf(aps.ts)
+plot(diff(diff(aps.ts, lag = 4), lag = 4), main = "Appliance Data, double-lagged (-4,-4)")
+ggAcf(diff(diff(aps.ts, lag = 4), lag = 4))
+```
+
+*Exponential smoothing with trend and seasonality (Holt-Winters)*
+
+c) Create a moving average time plot of the data, with a window span, *w*, of 4.
+
+```{r question c}
+autoplot(aps.ts) +
+  autolayer(ma(aps.ts, order = 4))
+```
+
+d) Using the last four quarters as a validation period, use the `ets()` function to run the a model as specified in the answer to question b. Plot a time plot of the predicted values against actual values. Check the residuals of the model, and compare the accuracy with a seasonal naive model.
+
+```{r question d}
+aps.train <- subset(aps.ts, end = length(aps.ts) - 4)
+aps.ets <- ets(aps.train, 
+               #model = "AAA"
+               )
+aps.fc <- forecast(aps.ets, h = 4)
+
+checkresiduals(aps.fc)
+
+autoplot(aps.fc) + 
+  autolayer(aps.ts, colour = FALSE) +
+  theme(legend.position = "none")
+
+accuracy(aps.fc, aps.ts)
+accuracy(snaive(aps.train, h = 4), aps.ts)
+```
