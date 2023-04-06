@@ -10,8 +10,9 @@ knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(forecast)
 library(zoo)
-
-setwd(getwd())
+library(here)
+#setwd(getwd())
+setwd(here())
 ```
 
 # Time Series Regression Models
@@ -123,7 +124,8 @@ plot(train.lm.poly.se$residuals, ylim = c(-250, 250), ylab = "Residuals",
      xlab = "Time", bty = "l", xaxt = "n", xlim = c(1991, 2006.25), main = "")
 axis(1, at = seq(1991, 2006, 1), labels  = format(seq(1991, 2006, 1)))
 lines(train.res.ar.pred$fitted, lwd = 2, col = "blue")
-
+ ?arima
+ ?Arima
 #check autocorrelation of residuals-of-residuals
 ggAcf(train.res.ar.pred$residuals, lag.max = 12)
 ```
@@ -187,10 +189,115 @@ The `SouvenirSales` time series contains monthly sales for a souvenir shop at a 
 - Check for autocorrelations.
 - Check for any required transformations.
 
-```{r souvenir sales, eval = FALSE}
+```{r souvenir sales, eval = TRUE}
 svs <- read.csv("data/SouvenirSales.csv") #read in file
 svs.ts <- ts(svs[,2], start = c(1995, 1), end = c(2001, 12), frequency = 12) #convert to ts
 
-svs.train <- window(svs.ts, start = , end = )
+nData <- length(svs$Date)
+nValid<- 12
+nTrain <- nData-nValid
+svs.train <- window(svs.ts, start = c(1995,01), end = c(1995, nTrain))
+svs.valid <- window(svs.ts, start = c(1995, nTrain+1), end = c(1995, nTrain+nValid))
+length(svs.train)
+length(svs.valid)
+```
+```{r setParameters}
+svsDate <- my(svs$Date)
+startTime <- min(svsDate)
+endTime <- max(svsDate)
+
+startYear <- year(startTime)
+endYear <- year(endTime)
+startMonth <- month(startTime)
+fivenum(svs$Sales)
+
+mtitle <- "Time Series:  Souvenier Sales (AUD)"
+stitle <- paste0(startYear, " - ", endYear)
+y_lab <- "Sales (AUD)"
+x_lab <- "Year"
+y_lim <- c(1600, 105000)              # range of val
+x_lim <- c(startYear, endYear+11/12)# range of time
+
+```
+```{r souvenirVisual, eval = TRUE}
+svs.ts %>% autoplot()
+# seasonality + trend
+svs.ts %>% ggtsdisplay()
+# ac at 1, 12, 24
+
+
+```
+```{r Martyn}
+
+lambda <- BoxCox.lambda(svs.train)
+lambda
+
+```
+
+```{r stl}
+svs.stl <- svs.ts %>%
+  stl(s.window="periodic")
+
+# change title to match season and trend windows TODO
+svs.stl %>% autoplot() +
+  ggtitle(mtitle, subtitle = stitle) +
+  xlab(x_lab) +
+  ylab(y_lab)
+svs.resid <- svs.stl$time.series[,3]
+svs.resid %>% autoplot()
+
+```
+```{r ets, eval=FALSE}
+
+svs.ets <- ets(svs.train, model="ANN")
+svs.ets.pred <- forecast(svs.ets, h = nValid, level = 0)
+
+plot(svs.ets.pred, ylim = y_lim, ylab = y_lab,
+     xlab = x_lab, bty = "l", xaxt = "n", xlim = x_lim,
+     main = "", flty = 2)
+grid(nx = NULL, ny = NULL, col = "lightgray", lty = "dotted",
+     lwd = par("lwd"), equilogs = TRUE)
+axis(1, at = seq(startYear,endYear, 1), labels = format(seq(startYear,endYear,1)) )
+lines(svs.ets.pred$fitted, lwd = 2, col = "blue")
+lines(svs.valid)
+
+accuracy(svs.ets.pred, svs.valid)
+
+
+```
+```{r acf}
+#- Check for autocorrelations.
+#- Check for any required transformations.
+
+svs.ts %>% ggtsdisplay()
+
+svs.ts %>% diff(lag=12) %>% ggtsdisplay()
+svs.ts %>% diff(lag=1) %>% ggtsdisplay()
+
+svs.ts %>% diff(lag=12)%>% diff(lag=12)%>% ggAcf()
+svs.manual <- svs.train %>% diff(lag=12)%>% diff(lag=12)
+checkresiduals(svs.manual)
+svs.manual.forecast <-forecast(svs.manual, h=nValid)
+
+accuracy(svs.manual.forecast, svs.valid)
+
+
+```
+```{r arima}
+
+
+svs.arima <- svs.train %>% auto.arima()
+svs.arima.pred <- svs.arima %>% forecast()
+
+plot(svs.arima.pred, ylim = y_lim, ylab = y_lab,
+     xlab = x_lab, bty = "l", xaxt = "n", xlim = x_lim,
+     main = "", flty = 2)
+grid(nx = NULL, ny = NULL, col = "lightgray", lty = "dotted",
+     lwd = par("lwd"), equilogs = TRUE)
+axis(1, at = seq(startYear,endYear, 1), labels = format(seq(startYear,endYear,1)) )
+lines(svs.arima.pred$fitted, lwd = 2, col = "blue")
+lines(svs.valid)
+
+accuracy(svs.arima.pred, svs.valid)
 
 ```
