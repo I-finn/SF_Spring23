@@ -1,0 +1,213 @@
+---
+title: "Social Forecasting Tutorial 4"
+author: "Martyn Egan"
+date: "06/04/2023"
+output: html_document
+---
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(forecast)
+library(zoo)
+
+setwd(getwd())
+```
+
+# Time Series Regression Models
+
+In last week's class we looked at data-driven approaches to forecasting time series. This week we will look at model-driven approaches, in particular *regression-based* models and *autoregressive* models (e.g. ARIMA).
+
+## Regression models
+
+The basic principles of time series regression will be familiar to you from cross-sectional regression methods. In time series regression, the predictor variable (x) is the time index, and the outcome (y) is the time series measurement or some function of it. The model will find the values of beta 0 (the time series' level), beta 1 (trend), and the noise (e). An example is given below using the familiar Amtrak dataset. 
+
+```{r linear regression}
+amtrak <- read.csv("data/Amtrak.csv") #read in data
+amtrak.ts <- ts(amtrak$Ridership, start = c(1991, 1), end = c(2004, 3), frequency = 12)
+
+train.ts <- window(amtrak.ts, end = c(1991, length(amtrak.ts) - 36)) #create a training set
+
+train.lm <- tslm(train.ts ~ trend) #the `trend` argument includes the time index as a linear predictor
+
+summary(train.lm)
+
+plot(train.ts, xlab = "Time", ylab = "Ridership", ylim = c(1300, 2300), bty = "l")
+lines(train.lm$fitted, lwd = 2)
+```
+
+We can use the `forecast()` function in the the `forecast` package to predict the values from the validation set using the training model.
+
+```{r forecasting}
+train.lm.pred <- forecast(train.lm, h = 36, level = 0)
+
+accuracy(train.lm.pred, amtrak.ts)
+
+plot(train.lm.pred, ylim = c(1300, 2600), ylab = "Ridership", xlab = "Time", bty = "l", 
+     xaxt = "n", xlim = c(1991, 2006.25), main = "", flty = 2)
+axis(1, at = seq(1991, 2006, 1), labels = format(seq(1991, 2006, 1)))
+lines(train.lm.pred$fitted, lwd = 2, col = "blue")
+lines(window(amtrak.ts, start = c(1991, length(amtrak.ts) - 35), end = c(1991, length(amtrak.ts))))
+```
+
+To model a non-linear trend, we simply adjust the formula, as we would using the `lm()` function.
+
+```{r nonlinear regression}
+train.lm.e <- tslm(train.ts ~ trend, lambda = 0) #to model an exponential trend, we set the lambda argument to zero (a value of 1 is linear)
+
+train.lm.poly <- tslm(train.ts ~ trend + I(trend^2)) #to model a quadratic trend, we add the squared term.
+```
+
+## Trend and Seasonality
+
+In order to model the effects of seasonality on our time series, we can add an additional variable with the relevant season for each observation (i.e. month, quarter, day, etc.). This will provide a coefficient for each frequency, similar to adding a categorical variable to a regression of cross-sectional data. The `tslm()` function automates the process.
+
+```{r seasonality regression}
+train.lm.se <- tslm(train.ts ~ season)
+summary(train.lm.se)
+
+plot(train.ts, xlab = "Time", ylab = "Ridership", ylim = c(1300, 2300), bty = "l")
+lines(train.lm.se$fitted, lwd = 2)
+```
+
+As we see from the plot above, the effect of modeling **only** seasonality is to create a repeating seasonal pattern throughout the data, with no trend. It is important to remember that `R` will model f-1 seasons to avoid multicollinearity; the intercept is thus the mean plus the conditional mean of the reference month (in this case January). We interpret the output therefore as March (season3) will have on average 260,000 more passengers than January, or that January will have 260,000 fewer passengers than March.
+
+Generally speaking, for time series which demonstrate both trend and seasonality, you will want to model both effects simultaneously. Below we model a quadratic trend with seasonality.
+
+```{r trend and seasonality}
+train.lm.poly.se <- tslm(train.ts ~ trend + I(trend^2) + season)
+summary(train.lm.poly.se)
+
+train.lm.poly.se.pred <- forecast(train.lm.poly.se, h = 36, level = 0)
+
+accuracy(train.lm.poly.se.pred, amtrak.ts)
+
+checkresiduals(train.lm.poly.se.pred)
+
+plot(train.lm.poly.se.pred, ylim = c(1300, 2600), ylab = "Ridership", xlab = "Time", 
+     bty = "l", xaxt = "n", xlim = c(1991, 2006.25), main = "", flty = 2)
+axis(1, at = seq(1991, 2006, 1), labels = format(seq(1991, 2006, 1)))
+lines(train.lm.poly.se.pred$fitted, lwd = 2, col = "blue")
+lines(window(amtrak.ts, start = c(1991, length(amtrak.ts) - 35), end = c(1991, length(amtrak.ts))))
+```
+
+## Smooth Seasonality
+
+A final note on seasonality: where the transition from one season to the next is smooth, forecasters sometimes add sinusoidal functions as predictors to capture the smooth seasonality pattern, with the general formula 2 x pi x trend / number of seasons (i.e. 52.18 for weeks, 365.25 for days). The code belows illustrates how to implement this for the Amtrak dataset.
+
+```{r smooth seasonal regression}
+train.lm.sm <- tslm(train.ts ~ trend + I(trend^2) + I(sin(2*pi*trend/12)) 
+                    + I(cos(2*pi*trend/12)))
+
+train.lm.sm.pred <- forecast(train.lm.sm, h = 36, level = 0)
+
+accuracy(train.lm.sm.pred, amtrak.ts)
+```
+
+In this case, adding smooth seasonality reduces the accuracy of the model.
+
+## Autocorrelation and autoregressive (AR) models
+
+Last week we looked at differencing (lagging) time series data and autocorrelation plots. Autocorrelation describes a relationship between the series and itself, and can be informative in improving forecasts. For instance, in the ACF of the quadratic seasonal model above, we can see that the first 5 lags all exhibit statistically significant autocorrelation. We can interpret this positive correlation as "stickiness" within the series, where consecutive values generally move in the same direction. A negative lag-1 autocorrelation, by contrast, would reflect swings in the data, with high and low values alternating.
+
+There are two approaches to capturing autocorrelation: autoregressive models (AR) and AutoRegressive Integrated Moving Average (ARIMA). We will first look at applying AR as a second-layer model to a pre-existing regression model, in this case our quadratic seasonal model. Essentially, AR as a second-layer model involves fitting an AR model to the series of residuals from the first model. In practice, the `Arima()` function from the `forecast` automates the process. Here, we apply the argument `order = c(1,0,0)` to specify we want the AR model.
+
+```{r AR as a second layer model}
+train.res.ar <- Arima(train.lm.poly.se$residuals, order = c(1,0,0)) #train an AR on the residuals
+train.res.ar.pred <- forecast(train.res.ar, h = 36) #forecast results 
+
+summary(train.res.ar)
+
+#plot model against residuals
+plot(train.lm.poly.se$residuals, ylim = c(-250, 250), ylab = "Residuals",
+     xlab = "Time", bty = "l", xaxt = "n", xlim = c(1991, 2006.25), main = "")
+axis(1, at = seq(1991, 2006, 1), labels  = format(seq(1991, 2006, 1)))
+lines(train.res.ar.pred$fitted, lwd = 2, col = "blue")
+
+#check autocorrelation of residuals-of-residuals
+ggAcf(train.res.ar.pred$residuals, lag.max = 12)
+```
+
+It is clear from the ACF that no more autocorrelation remains, and the AR(1) model has captured the autocorrelation information adequately. See p149 of the textbook for interpretation of the AR(1) model.
+
+## ARIMA
+
+ARIMA models are more flexible than AR models, but require more expertise. They include three terms: **p** is the number of autoregressive terms in the model, **q** is the number of moving average terms, and **d** is the number of integrated terms (or number of times a series is differenced before an ARMA model is applied). Because AR and ARIMA models can only be fitted to data without trend or seasonality, the **d** parameter is used to remove trend through differencing (1 = a linear trend, at lag-1; 2 = twice differencing the trend at lag-1 for quadratic trends, etc.) A seasonal-ARIMA model incorporates a step of differencing to remove seasonality.
+
+Because it can be difficult to specify the correct parameters for an ARIMA model, we will use the `auto.arima()` function (develop by Hyndman and Khandakar), which uses a combination of MLE and a stepwise search, to estimate the best parameters for us. 
+
+```{r ARIMA parameters}
+auto.arima(train.ts)
+```
+
+According to the `auto.arima()` function, the best parameters for an ARIMA model on the Amtrak data are an autocorrelation (p) of 1, lag-1 differencing to remove trend (d), and autocorrelation of 1 for the errors. The second brackets relate to the seasonality parameters, which `auto.arima()` estimates as 0 for p, 1 for d, and 1 for q. Let's run an ARIMA model with these parameters.
+
+```{r ARIMA model}
+train.ARIMA <- auto.arima(train.ts)
+summary(train.ARIMA)
+
+train.ARIMA.pred <- forecast(train.ARIMA, h = 36)
+
+accuracy(train.ARIMA.pred, amtrak.ts)
+checkresiduals(train.ARIMA.pred)
+
+plot(train.ARIMA.pred, ylim = c(1300, 2600), ylab = "Ridership", xlab = "Time", 
+     bty = "l", xaxt = "n", xlim = c(1991, 2006.25), main = "", flty = 2)
+axis(1, at = seq(1991, 2006, 1), labels = format(seq(1991, 2006, 1)))
+lines(train.ARIMA.pred$fitted, lwd = 2, col = "blue")
+lines(window(amtrak.ts, start = c(1991, length(amtrak.ts) - 35), end = c(1991, length(amtrak.ts))))
+```
+
+Our RMSE from using the ARIMA model to forecast the time series is 76.5 - roughly half what we achieved through the quadratic plus seasonal regression model.
+
+Note: the `auto.arima()` function also takes a `lamda =` argument, for applying Box-Cox transformations to data. A lambda of 2 is equivalent to y squared. We saw in our regression model that a quadratic transformation gave the best fit, so let's try adding a lambda of 2 to the ARIMA model. (The values are automatically transformed back when forecasting.)
+
+```{r ARIMA with lambda transformation}
+train.ARIMA.lbda.pred <- train.ts %>% 
+  auto.arima(lambda = 2) %>% 
+  forecast(h = 36)
+
+accuracy(train.ARIMA.lbda.pred, amtrak.ts)
+
+plot(train.ARIMA.lbda.pred, ylim = c(1300, 2600), ylab = "Ridership", xlab = "Time", 
+     bty = "l", xaxt = "n", xlim = c(1991, 2006.25), main = "", flty = 2)
+axis(1, at = seq(1991, 2006, 1), labels = format(seq(1991, 2006, 1)))
+lines(train.ARIMA.lbda.pred$fitted, lwd = 2, col = "blue")
+lines(window(amtrak.ts, start = c(1991, length(amtrak.ts) - 35), end = c(1991, length(amtrak.ts))))
+```
+
+We see a further slight improvement in RMSE with a lambda of 2. If you are unsure about the correct value of lambda, the `BoxCox.lambda()` function will estimate the optimal parameter (which in this case is very close to 2).
+
+### Task
+
+The `SouvenirSales` time series contains monthly sales for a souvenir shop at a beach resort town in Queensland, Australia, between 1995 and 2001. Your task is to build the best 12 month forecast model for the dataset. Make sure to:
+
+- Create an appropriate training period.
+- Examine the time plot of the data.
+- Check for autocorrelations.
+- Check for any required transformations.
+
+```{r souvenir sales}
+svs <- read.csv("data/SouvenirSales.csv") #read in file
+svs.ts <- ts(svs[,2], start = c(1995, 1), end = c(2001, 12), frequency = 12) #convert to ts
+
+svs.train <- window(svs.ts, start = c(1995,1), end = c(1995, length(svs.ts)-12))
+
+autoplot(svs.ts) #we see trend and multiplicative seasonality
+ggAcf(svs.train) #strong autocorrelation in lag-1, strong seasonal trend at 12 and 24 months
+
+BoxCox.lambda(svs.train) #it seems the optimal transformation is close to log (0.015)
+
+svs.train.ARIMA.pred <- svs.train %>% 
+  auto.arima(lambda = 0.015) %>% #run an ARIMA
+  forecast(h = 12)
+
+accuracy(svs.train.ARIMA.pred, svs.ts) #check accuracy
+checkresiduals(svs.train.ARIMA.pred) #check residuals
+
+plot(svs.train.ARIMA.pred, ylab = "Sales", xlab = "Time", 
+     bty = "l", xaxt = "n", xlim = c(1995, 2002), main = "", flty = 2)
+axis(1, at = seq(1995, 2001, 1), labels = format(seq(1995, 2001, 1)))
+lines(svs.train.ARIMA.pred$fitted, lwd = 2, col = "blue")
+lines(window(svs.ts, start = c(1995, length(svs.ts) - 11), end = c(1995, length(svs.ts))))
+```

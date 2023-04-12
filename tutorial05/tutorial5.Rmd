@@ -22,7 +22,7 @@ Last week we looked at model-based methods in time series forecasting, including
 
 ## Regression Models
 
-Adding additional predictors to a time-series linear model is a relatively simple procedure. The `tslm()` function in the `forecast` package will accept additional variables in a similar manner to the `lm()` function in base `R`. We will use the `BikeSharingDaily.csv` dataset to demonstrate the procedure. The first code chunk is take from the course reader, and is for preparing the data.
+Adding additional predictors to a time-series linear model is a relatively simple procedure. The `tslm()` function in the `forecast` package will accept additional variables in a similar manner to the `lm()` function in base `R`. We will use the `BikeSharingDaily.csv` dataset to demonstrate the procedure. The first code chunk is taken from the course reader, and is for preparing the data.
 
 ```{r external information preparation}
 # Load and prepare data.
@@ -179,6 +179,14 @@ confusionMatrix(as.factor(ifelse(rainy.pred > 0.5, 1, 0)),
 ```
 
 As the confusion matrix demonstrates, the model is quite accurate at predicting no-rain days (94.7% - the specificity score) and about 20% accurate at predicting rarer rainy days (sensitivity).
+
+## A Final Word on External Information...
+
+When using external information (i.e. additional predictors) to forecast time series data, we always need to think about the real life scenario in which the model will be used. 
+
+Take the bike rental case above: it's clear that there is some *thing* which is leading to a sharp fall in demand that none of our models is capturing. What could this omitted variable be?
+
+Perhaps more importantly, think about the external information we're using. What variable in our model could be problematic for *forecasting* demand? How might we better model this uncertainty in our forecast?
 
 ### Case Study
 
