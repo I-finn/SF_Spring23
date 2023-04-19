@@ -194,4 +194,79 @@ The `bicup2006.csv` dataset contains historic information on passengers arriving
 
 ```{r case study, eval = FALSE}
 bicup <- read.csv("data/bicup2006.csv")
+head(bicup)
+bicup$DATE <- dmy_hm(paste(bicup$DATE, bicup$TIME))
+
+bicup$DOW <- wday(bicup$DATE, label = TRUE)
+head(bicup)
+
+bicup$workingday <- ifelse(bicup$DOW %in% c("Sun", "Sat"), 0, 1)
+#head(DOW.dummies)
+bicup$WorkingDay <- factor(bicup$workingday, levels = c(0, 1), labels = c("Not_Working", "Working"))
+bicup$TIME <- hm( bicup$TIME)
+
+TIME.dummies <- model.matrix(~0 + TIME, data = bicup)
+DOW.dummies <- model.matrix(~ 0 +  DOW, data = bicup)
+colnames(DOW.dummies) <- gsub("DOW", "", colnames(DOW.dummies))
+colnames(TIME.dummies) <- gsub("time", "", colnames(TIME.dummies))
+
+
+y <- bicup$DEMAND
+x <- DOW.dummies
+
+head(bicup$TIME)
+
+head(TIME.dummies)
+# Set up training and validation sets.
+x <- as.data.frame(cbind(DOW.dummies[, -7], TIME.dummies))
+x
+
+
+
+bicup.ts <- ts(bicup$DEMAND, c(1,3,2005))
+
+bicup.ts %>% autoplot()
+
+
+nTotal <- length(bicup$DATE)
+
+nValid <- nTotal/3
+nTrain <- nTotal - nValid
+xTrain <- x[1:nTrain, ]
+yTrain <- y[1:nTrain]
+xValid <- x[(nTrain + 1):nTotal, ]
+yValid <- y[(nTrain + 1):nTotal]
+
+yTrain.ts <- ts(yTrain) #create ts object
+
+(formula <- as.formula(paste("yTrain.ts", paste(c("trend", colnames(xTrain)), collapse = "+"), sep = "~"))) #creat
+
+bicup.tslm <- tslm(formula, data = xTrain, lambda = 1)
+options(scipen = 999, digits = 6)
+summary(bicup.tslm)
+
+bicup.tslm.pred <-  forecast(bicup.tslm, newdata = xValid)
+accuracy(bicup.tslm.pred, yValid)
+
+checkresiduals(bicup.tslm.pred)
+24*60*60/15
+
+
+````
+```{r extra} 
+y.ts<- ts(y)
+times.ts <- time(y.ts)
+#ylim = c(0, 9000), 
+plot(bicup.tslm.pred, xlab = "Days", ylab = "Daily Bike Rentals")
+lines(window(y.ts, start = times.ts[nValid + 1]))
 ```
+
+```{r arima}
+bike.dyn <- auto.arima(yTrain, xreg = as.matrix(xTrain)) #xreg requires a matrix
+
+bike.dyn.pred <- forecast(bike.dyn, xreg = as.matrix(xValid)) #xreg functions here like the newdata arg
+
+accuracy(bike.dyn.pred, yValid)
+```
+
+
